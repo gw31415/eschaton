@@ -10,14 +10,13 @@ mod eschaton;
 
 struct Report<'a> {
     state: &'a State,
-    student: &'a Option<eschaton::Student>,
+    student: &'a Option<&'a eschaton::Student>,
     db: &'a eschaton::Database,
 }
 
 impl std::fmt::Display for Report<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = tabled::builder::Builder::new();
-        let fail: usize = self.state.fails.values().sum();
         builder.push_record(["LAST REPORT", "①", "②", "③", "④", "⑤", "⑥"]);
         let slots = self.db.get_slots();
         builder.push_record(
@@ -59,14 +58,14 @@ impl std::fmt::Display for Report<'_> {
             f,
             "TRIAL: {}, SUCCESS: {} ({:.8} %)",
             self.state.count,
-            self.state.count - fail,
-            100.0 - (fail as f64 / self.state.count as f64 * 100.0)
+            self.state.success,
+            self.state.success as f64 / self.state.count as f64 * 100.0,
         )?;
 
         let mut fails: Vec<(_, _)> = self.state.fails.iter().collect();
         fails.sort_by(|(_, a), (_, b)| b.cmp(a));
         let mut builder = tabled::builder::Builder::new();
-        for (i, (name, fail)) in fails.into_iter().enumerate().take(40) {
+        for (i, (name, fail)) in fails.into_iter().enumerate() {
             let rate = 100.0 * *fail as f64 / self.state.count as f64;
             builder.push_record([
                 (i + 1).to_string(),
@@ -84,6 +83,7 @@ impl std::fmt::Display for Report<'_> {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 struct State {
     pub count: usize,
+    pub success: usize,
     pub fails: HashMap<String, usize>,
 }
 
@@ -99,10 +99,13 @@ impl AddAssign<&Self> for State {
     }
 }
 
-impl AddAssign<Option<eschaton::Student>> for State {
-    fn add_assign(&mut self, rhs: Option<eschaton::Student>) {
+impl AddAssign<Vec<eschaton::Student>> for State {
+    fn add_assign(&mut self, rhs: Vec<eschaton::Student>) {
         self.count += 1;
-        if let Some(student) = rhs {
+        if rhs.is_empty() {
+            self.success += 1;
+        }
+        for student in rhs {
             self.fails
                 .entry(student.into_name())
                 .and_modify(|c| *c += 1)
@@ -113,9 +116,8 @@ impl AddAssign<Option<eschaton::Student>> for State {
 
 #[tokio::main]
 async fn main() {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<
-        Result<eschaton::Database, (eschaton::Student, eschaton::Database)>,
-    >(4096);
+    let (tx, mut rx) =
+        tokio::sync::mpsc::channel::<(Vec<eschaton::Student>, eschaton::Database)>(4096);
     tokio::spawn(async move {
         let stdout_duration = std::time::Duration::from_millis(1000 / 5);
         let save_duration = std::time::Duration::from_secs(5);
@@ -131,11 +133,7 @@ async fn main() {
         let mut last_shown = tokio::time::Instant::now();
         let mut last_saved = tokio::time::Instant::now();
         loop {
-            if let Some(recv) = rx.recv().await {
-                let (student, db) = match recv {
-                    Ok(db) => (None, db),
-                    Err((student, db)) => (Some(student), db),
-                };
+            if let Some((students, db)) = rx.recv().await {
                 if last_shown.elapsed() > stdout_duration {
                     last_shown = tokio::time::Instant::now();
                     if last_saved.elapsed() > save_duration {
@@ -146,12 +144,12 @@ async fn main() {
                     }
                     let report = Report {
                         state: &state,
-                        student: &student,
+                        student: &students.first(),
                         db: &db,
                     };
                     println!("{report}");
                 }
-                state += student;
+                state += students;
             } else {
                 tokio::fs::write("state.json", serde_json::to_vec_pretty(&state).unwrap())
                     .await
@@ -197,7 +195,7 @@ async fn main() {
         tokio::spawn(async move {
             loop {
                 let mut db: eschaton::Database = db.as_ref().clone();
-                let result = {
+                let result: (Vec<_>, eschaton::Database) = {
                     let mut rng = rand::rng();
                     let mut students: Vec<eschaton::Student> = {
                         let mut s = students.as_ref().clone();
@@ -205,19 +203,22 @@ async fn main() {
                         s
                     }
                     .clone();
+                    let mut eschatons = Vec::new();
                     'game: loop {
-                        for student in students.iter_mut() {
+                        let mut undone_students = Vec::new();
+                        for mut student in students {
                             if student.done() {
                                 continue;
-                            }
-                            if db.random_select(student, &mut rng).is_err() {
-                                break 'game Err((std::mem::take(student), db));
+                            } else if db.random_select(&mut student, &mut rng).is_err() {
+                                eschatons.push(student);
+                            } else {
+                                undone_students.push(student);
                             }
                         }
-                        students.retain(|s| !s.done());
-                        if students.is_empty() {
-                            break 'game Ok(db);
+                        if undone_students.is_empty() {
+                            break 'game (eschatons, db);
                         }
+                        students = undone_students;
                     }
                 };
                 let _ = tx.send(result).await;
