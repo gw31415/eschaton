@@ -145,6 +145,7 @@ async fn main() {
         let mut last_saved = tokio::time::Instant::now();
         loop {
             if let Some(trial) = rx.recv().await {
+                state += trial;
                 if last_shown.elapsed() > stdout_duration {
                     last_shown = tokio::time::Instant::now();
                     if last_saved.elapsed() > save_duration {
@@ -155,7 +156,6 @@ async fn main() {
                     }
                     println!("{state}");
                 }
-                state += trial;
             } else {
                 tokio::fs::write("state.json", serde_json::to_vec_pretty(&state).unwrap())
                     .await
