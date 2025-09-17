@@ -109,10 +109,7 @@ struct Trial {
 
 impl AddAssign<Trial> for State {
     fn add_assign(&mut self, rhs: Trial) {
-        let Trial {
-            victims,
-            vacants,
-        } = rhs;
+        let Trial { victims, vacants } = rhs;
         self.count += 1;
         if victims.is_empty() {
             self.success += 1;
