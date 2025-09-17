@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     fmt::Display,
+    iter::once,
     ops::{AddAssign, BitAnd, SubAssign},
     str::FromStr,
 };
@@ -71,6 +72,12 @@ impl SubAssign<HospitalType> for TermVacants {
 }
 
 impl TermVacants {
+    pub fn iter(&self) -> impl Iterator<Item = usize> {
+        once(self.inner_medical)
+            .chain(once(self.inner_surgical))
+            .chain(once(self.outer_medical))
+            .chain(once(self.outer_surgical))
+    }
     pub fn len(&self) -> usize {
         self.inner_medical + self.inner_surgical + self.outer_medical + self.outer_surgical
     }

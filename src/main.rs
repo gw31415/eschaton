@@ -126,6 +126,8 @@ impl AddAssign<Trial> for State {
     }
 }
 
+const MAX_SAFE_INTEGER: usize = (1 << 53) - 1;
+
 #[tokio::main]
 async fn main() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Trial>(4096);
@@ -146,6 +148,15 @@ async fn main() {
         loop {
             if let Some(trial) = rx.recv().await {
                 state += trial;
+                if state
+                    .vacants
+                    .iter()
+                    .flat_map(|v| v.iter())
+                    .chain(once(state.count))
+                    .any(|i| i > MAX_SAFE_INTEGER)
+                {
+                    panic!("count exceeded Number.MAX_SAFE_INTEGER");
+                }
                 if last_shown.elapsed() > stdout_duration {
                     last_shown = tokio::time::Instant::now();
                     if last_saved.elapsed() > save_duration {
