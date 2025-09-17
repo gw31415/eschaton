@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, iter::once, mem::MaybeUninit, ops::AddAssign, sync::Arc,
+    borrow::Cow, collections::HashMap, iter::once, mem::MaybeUninit, ops::AddAssign, sync::Arc,
     thread::available_parallelism,
 };
 
@@ -8,65 +8,66 @@ use tabled::settings::Style;
 
 mod eschaton;
 
-struct Report<'a> {
-    state: &'a State,
-    student: &'a Option<&'a eschaton::Student>,
-    db: &'a eschaton::Database,
+fn to_string(i: usize) -> String {
+    let tens = i / 10;
+    let ones = i - (tens * 10);
+
+    let res = Vec::from([
+        if tens == 0 { b' ' } else { tens as u8 + b'0' },
+        (ones as u8 + b'0'),
+    ]);
+    unsafe { String::from_utf8_unchecked(res) }
 }
 
-impl std::fmt::Display for Report<'_> {
+impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = tabled::builder::Builder::new();
-        builder.push_record(["LAST REPORT", "①", "②", "③", "④", "⑤", "⑥"]);
-        let slots = self.db.get_slots();
+        builder.push_record(["平均残席数", "①", "②", "③", "④", "⑤", "⑥"]);
+        let slots = &self.table_vacants;
         builder.push_record(
-            once("院内内科".to_string()).chain(slots.iter().map(|s| s.inner_medical.to_string())),
+            once(Cow::Borrowed("院内内科")).chain(
+                slots
+                    .iter()
+                    .map(|s| to_string(s.inner_medical / self.count).into()),
+            ),
         );
         builder.push_record(
-            once("院内外科".to_string()).chain(slots.iter().map(|s| s.inner_surgical.to_string())),
+            once(Cow::Borrowed("院内外科")).chain(
+                slots
+                    .iter()
+                    .map(|s| to_string(s.inner_surgical / self.count).into()),
+            ),
         );
         builder.push_record(
-            once("院外内科".to_string()).chain(slots.iter().map(|s| s.outer_medical.to_string())),
+            once(Cow::Borrowed("院外内科")).chain(
+                slots
+                    .iter()
+                    .map(|s| to_string(s.outer_medical / self.count).into()),
+            ),
         );
         builder.push_record(
-            once("院外外科".to_string()).chain(slots.iter().map(|s| s.outer_surgical.to_string())),
+            once(Cow::Borrowed("院外外科")).chain(
+                slots
+                    .iter()
+                    .map(|s| to_string(s.outer_surgical / self.count).into()),
+            ),
         );
-        if let Some(student) = &self.student {
-            let student_name = {
-                let name = student.get_name();
-                let width = unicode_width::UnicodeWidthStr::width(name);
-                let mut result = String::with_capacity(20);
-                result.push_str(name);
-                result.push_str(&" ".repeat(20 - width));
-                result
-            };
-            builder.push_record(once(student_name).chain(student.get_selection().iter().map(
-                |s| {
-                    if let Some(hospital) = s {
-                        hospital.to_string()
-                    } else {
-                        "    ".to_string()
-                    }
-                },
-            )));
-        }
-        let mut table = builder.build();
-        std::fmt::Display::fmt(table.with(Style::modern()), f)?;
+        std::fmt::Display::fmt(builder.build().with(Style::modern()), f)?;
         writeln!(f)?;
 
         writeln!(
             f,
             "TRIAL: {}, SUCCESS: {} ({:.3} %)",
-            self.state.count,
-            self.state.success,
-            self.state.success as f64 / self.state.count as f64 * 100.0,
+            self.count,
+            self.success,
+            self.success as f64 / self.count as f64 * 100.0,
         )?;
 
-        let mut fails: Vec<(_, _)> = self.state.fails.iter().collect();
+        let mut fails: Vec<(_, _)> = self.fails.iter().collect();
         fails.sort_by(|(_, a), (_, b)| b.cmp(a));
         let mut builder = tabled::builder::Builder::new();
         for (i, (name, fail)) in fails.into_iter().enumerate() {
-            let rate = 100.0 * *fail as f64 / self.state.count as f64;
+            let rate = 100.0 * *fail as f64 / self.count as f64;
             builder.push_record([
                 (i + 1).to_string(),
                 name.to_string(),
@@ -80,44 +81,60 @@ impl std::fmt::Display for Report<'_> {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct State {
     pub count: usize,
     pub success: usize,
     pub fails: HashMap<String, usize>,
+    pub table_vacants: eschaton::HospitalTableInner,
 }
 
-impl AddAssign<&Self> for State {
-    fn add_assign(&mut self, rhs: &Self) {
-        self.count += rhs.count;
-        for (name, count) in &rhs.fails {
-            self.fails
-                .entry(name.clone())
-                .and_modify(|c| *c += count)
-                .or_insert(*count);
+impl Default for State {
+    fn default() -> Self {
+        State {
+            count: 0,
+            success: 0,
+            fails: Default::default(),
+            table_vacants: std::array::from_fn(|_| eschaton::TermVacants {
+                inner_medical: 0,
+                inner_surgical: 0,
+                outer_medical: 0,
+                outer_surgical: 0,
+            }),
         }
     }
 }
 
-impl AddAssign<Vec<eschaton::Student>> for State {
-    fn add_assign(&mut self, rhs: Vec<eschaton::Student>) {
+struct Trial {
+    pub students: Vec<eschaton::Student>,
+    pub table_vacants: eschaton::HospitalTableInner,
+}
+
+impl AddAssign<Trial> for State {
+    fn add_assign(&mut self, rhs: Trial) {
+        let Trial {
+            students,
+            table_vacants,
+        } = rhs;
         self.count += 1;
-        if rhs.is_empty() {
+        if students.is_empty() {
             self.success += 1;
         }
-        for student in rhs {
+        for student in students {
             self.fails
                 .entry(student.into_name())
                 .and_modify(|c| *c += 1)
                 .or_insert(1);
+        }
+        for (a, b) in self.table_vacants.iter_mut().zip(table_vacants.iter()) {
+            *a += b;
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
-    let (tx, mut rx) =
-        tokio::sync::mpsc::channel::<(Vec<eschaton::Student>, eschaton::Database)>(4096);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Trial>(4096);
     tokio::spawn(async move {
         let stdout_duration = std::time::Duration::from_millis(1000 / 5);
         let save_duration = std::time::Duration::from_secs(5);
@@ -133,7 +150,7 @@ async fn main() {
         let mut last_shown = tokio::time::Instant::now();
         let mut last_saved = tokio::time::Instant::now();
         loop {
-            if let Some((students, db)) = rx.recv().await {
+            if let Some(trial) = rx.recv().await {
                 if last_shown.elapsed() > stdout_duration {
                     last_shown = tokio::time::Instant::now();
                     if last_saved.elapsed() > save_duration {
@@ -142,14 +159,9 @@ async fn main() {
                             .await
                             .unwrap();
                     }
-                    let report = Report {
-                        state: &state,
-                        student: &students.first(),
-                        db: &db,
-                    };
-                    println!("{report}");
+                    println!("{state}");
                 }
-                state += students;
+                state += trial;
             } else {
                 tokio::fs::write("state.json", serde_json::to_vec_pretty(&state).unwrap())
                     .await
@@ -159,7 +171,7 @@ async fn main() {
         }
     });
     let mut reserves = csv::Reader::from_reader(include_bytes!("./reserves.csv").as_slice());
-    let mut maybeuninit: [MaybeUninit<eschaton::HospitalSlots>; 6] =
+    let mut maybeuninit: [MaybeUninit<eschaton::TermVacants>; 6] =
         std::array::from_fn(|_| MaybeUninit::uninit());
     for (i, row) in reserves.deserialize().enumerate() {
         maybeuninit
@@ -168,22 +180,18 @@ async fn main() {
             .write(row.expect("Failed to parse reserves.csv"));
     }
     let (db, students) = {
-        let mut db = eschaton::Database::new(unsafe {
-            std::mem::transmute::<
-                [MaybeUninit<eschaton::HospitalSlots>; 6],
-                [eschaton::HospitalSlots; 6],
-            >(maybeuninit)
+        let mut db = eschaton::HospitalTable::new(unsafe {
+            std::mem::transmute::<[MaybeUninit<eschaton::TermVacants>; 6], [eschaton::TermVacants; 6]>(
+                maybeuninit,
+            )
         });
         let students = Arc::new(
             csv::Reader::from_reader(include_bytes!("./students.csv").as_slice())
-                .deserialize::<eschaton::StudentRecord>()
+                .deserialize::<eschaton::InitStudentOption>()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
                 .into_iter()
-                .map(|s| {
-                    let (name, selection) = s.extract();
-                    db.new_student(name, selection)
-                })
+                .map(|s| db.init_student(s))
                 .collect::<Vec<_>>(),
         );
         (Arc::new(db), students)
@@ -194,8 +202,8 @@ async fn main() {
         let students = students.clone();
         tokio::spawn(async move {
             loop {
-                let mut db: eschaton::Database = db.as_ref().clone();
-                let result: (Vec<_>, eschaton::Database) = {
+                let mut db: eschaton::HospitalTable = db.as_ref().clone();
+                let trial: Trial = {
                     let mut rng = rand::rng();
                     let mut students: Vec<eschaton::Student> = {
                         let mut s = students.as_ref().clone();
@@ -216,12 +224,15 @@ async fn main() {
                             }
                         }
                         if undone_students.is_empty() {
-                            break 'game (eschatons, db);
+                            break 'game Trial {
+                                students: eschatons,
+                                table_vacants: db.into_inner(),
+                            };
                         }
                         students = undone_students;
                     }
                 };
-                let _ = tx.send(result).await;
+                let _ = tx.send(trial).await;
             }
         });
     }

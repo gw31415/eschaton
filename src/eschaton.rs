@@ -1,72 +1,76 @@
 use std::{
     collections::HashSet,
     fmt::Display,
-    ops::{BitAnd, SubAssign},
+    ops::{AddAssign, BitAnd, SubAssign},
+    str::FromStr,
 };
 
+use serde_with::{DeserializeFromStr, NoneAsEmptyString, serde_as};
+
 // 院外、院内、外科、内科はそれぞれ3つずつ選択する必要がある
-#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
-pub enum Hospital {
+#[derive(Eq, PartialEq, Hash, Clone, Copy, DeserializeFromStr)]
+pub enum HospitalType {
     InnerMedical,
     InnerSurgical,
     OuterSurgical,
     OuterMedical,
 }
 
-impl Display for Hospital {
+impl FromStr for HospitalType {
+    type Err = &'static str;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "院内内科" => Ok(HospitalType::InnerMedical),
+            "院内外科" => Ok(HospitalType::InnerSurgical),
+            "院外内科" => Ok(HospitalType::OuterMedical),
+            "院外外科" => Ok(HospitalType::OuterSurgical),
+            _ => Err("Could not parse the &str as HospitalType"),
+        }
+    }
+}
+
+impl Display for HospitalType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
             match self {
-                Hospital::InnerMedical => "🏠💊",
-                Hospital::InnerSurgical => "🏠🔪",
-                Hospital::OuterMedical => "🚙💊",
-                Hospital::OuterSurgical => "🚙🔪",
+                HospitalType::InnerMedical => "🏠💊",
+                HospitalType::InnerSurgical => "🏠🔪",
+                HospitalType::OuterMedical => "🚙💊",
+                HospitalType::OuterSurgical => "🚙🔪",
             }
         )
     }
 }
 
-#[derive(Debug)]
 pub enum Course {
+    /// 院外外科1、院外内科2、院内外科2、院内内科1
     Eschaton,
+    /// 院外外科2、院外内科1、院内外科1、院内内科2
     Avoidance,
 }
 
-impl Display for Course {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Course::Eschaton => "💀",
-                Course::Avoidance => "👍",
-            }
-        )
-    }
-}
-
-#[derive(Clone, serde::Deserialize, serde::Serialize, Debug)]
-pub struct HospitalSlots {
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub struct TermVacants {
     pub inner_medical: usize,
     pub inner_surgical: usize,
     pub outer_medical: usize,
     pub outer_surgical: usize,
 }
 
-impl SubAssign<Hospital> for HospitalSlots {
-    fn sub_assign(&mut self, rhs: Hospital) {
+impl SubAssign<HospitalType> for TermVacants {
+    fn sub_assign(&mut self, rhs: HospitalType) {
         match rhs {
-            Hospital::InnerMedical => self.inner_medical -= 1,
-            Hospital::InnerSurgical => self.inner_surgical -= 1,
-            Hospital::OuterMedical => self.outer_medical -= 1,
-            Hospital::OuterSurgical => self.outer_surgical -= 1,
+            HospitalType::InnerMedical => self.inner_medical -= 1,
+            HospitalType::InnerSurgical => self.inner_surgical -= 1,
+            HospitalType::OuterMedical => self.outer_medical -= 1,
+            HospitalType::OuterSurgical => self.outer_surgical -= 1,
         }
     }
 }
 
-impl HospitalSlots {
+impl TermVacants {
     pub fn len(&self) -> usize {
         self.inner_medical + self.inner_surgical + self.outer_medical + self.outer_surgical
     }
@@ -86,7 +90,7 @@ impl HospitalSlots {
         outer_surgical: usize,
         outer_medical: usize,
     ) -> Self {
-        HospitalSlots {
+        TermVacants {
             inner_medical,
             inner_surgical,
             outer_medical,
@@ -99,20 +103,20 @@ impl HospitalSlots {
     pub fn infinite() -> Self {
         Self::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX)
     }
-    pub fn count(&self, h: Hospital) -> usize {
+    pub fn count(&self, h: HospitalType) -> usize {
         match h {
-            Hospital::InnerMedical => self.inner_medical,
-            Hospital::InnerSurgical => self.inner_surgical,
-            Hospital::OuterMedical => self.outer_medical,
-            Hospital::OuterSurgical => self.outer_surgical,
+            HospitalType::InnerMedical => self.inner_medical,
+            HospitalType::InnerSurgical => self.inner_surgical,
+            HospitalType::OuterMedical => self.outer_medical,
+            HospitalType::OuterSurgical => self.outer_surgical,
         }
     }
 }
 
-impl BitAnd<&Self> for HospitalSlots {
+impl BitAnd<&Self> for TermVacants {
     type Output = Self;
     fn bitand(self, rhs: &Self) -> Self::Output {
-        HospitalSlots::new(
+        TermVacants::new(
             self.inner_medical.min(rhs.inner_medical),
             self.inner_surgical.min(rhs.inner_surgical),
             self.outer_surgical.min(rhs.outer_surgical),
@@ -121,16 +125,25 @@ impl BitAnd<&Self> for HospitalSlots {
     }
 }
 
-impl From<&Course> for HospitalSlots {
+impl AddAssign<&Self> for TermVacants {
+    fn add_assign(&mut self, rhs: &Self) {
+        self.inner_medical += rhs.inner_medical;
+        self.inner_surgical += rhs.inner_surgical;
+        self.outer_medical += rhs.outer_medical;
+        self.outer_surgical += rhs.outer_surgical;
+    }
+}
+
+impl From<&Course> for TermVacants {
     fn from(value: &Course) -> Self {
         match value {
-            Course::Eschaton => HospitalSlots {
+            Course::Eschaton => TermVacants {
                 inner_medical: 1,
                 inner_surgical: 2,
                 outer_medical: 2,
                 outer_surgical: 1,
             },
-            Course::Avoidance => HospitalSlots {
+            Course::Avoidance => TermVacants {
                 inner_medical: 2,
                 inner_surgical: 1,
                 outer_medical: 1,
@@ -141,44 +154,28 @@ impl From<&Course> for HospitalSlots {
 }
 
 /// 学生
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Student {
     name: String,
-    selection: [Option<Hospital>; 6],
+    selection: [Option<HospitalType>; 6],
 }
 
-#[derive(serde::Deserialize, Debug)]
-pub struct StudentRecord {
-    name: String,
-    term1: String,
-    term2: String,
-    term3: String,
-    term4: String,
-    term5: String,
-    term6: String,
-}
-
-impl StudentRecord {
-    pub fn extract(self) -> (String, [Option<Hospital>; 6]) {
-        let StudentRecord {
-            name,
-            term1,
-            term2,
-            term3,
-            term4,
-            term5,
-            term6,
-        } = self;
-        let selection = [term1, term2, term3, term4, term5, term6].map(|term| match term.trim() {
-            "院内内科" => Some(Hospital::InnerMedical),
-            "院内外科" => Some(Hospital::InnerSurgical),
-            "院外内科" => Some(Hospital::OuterMedical),
-            "院外外科" => Some(Hospital::OuterSurgical),
-            "" => None,
-            _ => panic!("未定義の病院名が指定されました: {term}"),
-        });
-        (name, selection)
-    }
+#[serde_as]
+#[derive(serde::Deserialize)]
+pub struct InitStudentOption {
+    pub name: String,
+    #[serde_as(as = "NoneAsEmptyString")]
+    pub term1: Option<HospitalType>,
+    #[serde_as(as = "NoneAsEmptyString")]
+    pub term2: Option<HospitalType>,
+    #[serde_as(as = "NoneAsEmptyString")]
+    pub term3: Option<HospitalType>,
+    #[serde_as(as = "NoneAsEmptyString")]
+    pub term4: Option<HospitalType>,
+    #[serde_as(as = "NoneAsEmptyString")]
+    pub term5: Option<HospitalType>,
+    #[serde_as(as = "NoneAsEmptyString")]
+    pub term6: Option<HospitalType>,
 }
 
 impl Student {
@@ -191,7 +188,7 @@ impl Student {
         self.name
     }
     /// 選択状況を取得
-    pub fn get_selection(&self) -> &[Option<Hospital>; 6] {
+    pub fn get_selection(&self) -> &[Option<HospitalType>; 6] {
         &self.selection
     }
     /// コースが推定できる場合は返す
@@ -200,10 +197,10 @@ impl Student {
         for h in self.selection.iter().filter_map(|x| x.as_ref()) {
             if !already_shown.insert(h) {
                 return Some(match h {
-                    Hospital::InnerMedical => Course::Avoidance,
-                    Hospital::InnerSurgical => Course::Eschaton,
-                    Hospital::OuterMedical => Course::Eschaton,
-                    Hospital::OuterSurgical => Course::Avoidance,
+                    HospitalType::InnerMedical => Course::Avoidance,
+                    HospitalType::InnerSurgical => Course::Eschaton,
+                    HospitalType::OuterMedical => Course::Eschaton,
+                    HospitalType::OuterSurgical => Course::Avoidance,
                 });
             }
         }
@@ -216,61 +213,68 @@ impl Student {
             .enumerate()
             .filter_map(|(i, x)| if x.is_none() { Some(i) } else { None })
     }
-    fn slots(&self) -> HospitalSlots {
+    /// 現時点で残り必要な病院の数を返す
+    fn required_hospitals(&self) -> TermVacants {
         if let Some(course) = self.course() {
-            let mut slot = HospitalSlots::from(&course);
+            let mut slot = TermVacants::from(&course);
             for selection in self.selection.iter().flatten() {
                 slot -= *selection;
             }
             slot
         } else {
-            HospitalSlots::infinite()
+            TermVacants::infinite()
         }
     }
+    /// 必要単位を全て満たした学生
     pub fn done(&self) -> bool {
         self.selection.iter().all(|x| x.is_some())
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Database([HospitalSlots; 6]);
+pub type HospitalTableInner = [TermVacants; 6];
 
-impl BitAnd<&Student> for &Database {
-    type Output = Database;
+#[derive(Clone)]
+pub struct HospitalTable(HospitalTableInner);
+
+impl BitAnd<&Student> for &HospitalTable {
+    type Output = HospitalTable;
     fn bitand(self, rhs: &Student) -> Self::Output {
-        let mut hospitals: [HospitalSlots; 6] = core::array::from_fn(|_| HospitalSlots::zero());
-        let slots = rhs.slots();
+        let mut hospitals: HospitalTableInner = core::array::from_fn(|_| TermVacants::zero());
+        let slots = rhs.required_hospitals();
         for term in rhs.selectable_terms() {
             hospitals[term] = self.0[term].clone() & &slots;
         }
-        Database(hospitals)
+        HospitalTable(hospitals)
     }
 }
 
-impl Database {
-    pub fn new(slots: [HospitalSlots; 6]) -> Self {
-        Database(slots)
+impl HospitalTable {
+    pub fn into_inner(self) -> HospitalTableInner {
+        self.0
     }
-    pub fn is_empty(&self) -> bool {
-        self.0.iter().all(HospitalSlots::is_empty)
-    }
-    pub fn len(&self) -> usize {
-        self.0.iter().map(HospitalSlots::len).sum()
-    }
-    pub fn get_slots(&self) -> &[HospitalSlots; 6] {
+    pub fn as_inner(&self) -> &HospitalTableInner {
         &self.0
     }
-    fn index(&self, mut i: usize) -> Option<(usize, Hospital)> {
+    pub fn new(slots: HospitalTableInner) -> Self {
+        HospitalTable(slots)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(TermVacants::is_empty)
+    }
+    pub fn len(&self) -> usize {
+        self.0.iter().map(TermVacants::len).sum()
+    }
+    fn index(&self, mut i: usize) -> Option<(usize, HospitalType)> {
         let sizes: [usize; 6] = self.0.clone().map(|slot| slot.len());
         for (term, &size) in sizes.iter().enumerate() {
             if i < size {
                 let slot = &self.0[term];
                 let mut count = 0;
                 for &hospital in [
-                    Hospital::InnerMedical,
-                    Hospital::InnerSurgical,
-                    Hospital::OuterSurgical,
-                    Hospital::OuterMedical,
+                    HospitalType::InnerMedical,
+                    HospitalType::InnerSurgical,
+                    HospitalType::OuterSurgical,
+                    HospitalType::OuterMedical,
                 ]
                 .iter()
                 {
@@ -286,6 +290,7 @@ impl Database {
         // If we reach here, i > self.len() or self.is_empty()
         None
     }
+    /// ランダムに学生を選択する
     pub fn random_select(
         &mut self,
         student: &mut Student,
@@ -301,7 +306,18 @@ impl Database {
         student.selection[term] = Some(hospital);
         Ok(())
     }
-    pub fn new_student(&mut self, name: String, selection: [Option<Hospital>; 6]) -> Student {
+    pub fn init_student(&mut self, student: InitStudentOption) -> Student {
+        let InitStudentOption {
+            name,
+            term1,
+            term2,
+            term3,
+            term4,
+            term5,
+            term6,
+        } = student;
+        let selection = [term1, term2, term3, term4, term5, term6];
+
         for (term, hospital) in selection.iter().enumerate() {
             if let Some(hospital) = hospital {
                 self.0[term] -= *hospital;
