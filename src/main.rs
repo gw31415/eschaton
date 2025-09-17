@@ -56,7 +56,7 @@ impl std::fmt::Display for Report<'_> {
 
         writeln!(
             f,
-            "TRIAL: {}, SUCCESS: {} ({:.8} %)",
+            "TRIAL: {}, SUCCESS: {} ({:.3} %)",
             self.state.count,
             self.state.success,
             self.state.success as f64 / self.state.count as f64 * 100.0,
@@ -71,7 +71,7 @@ impl std::fmt::Display for Report<'_> {
                 (i + 1).to_string(),
                 name.to_string(),
                 fail.to_string(),
-                format!("{rate:.8} %"),
+                format!("{rate:.3} %"),
             ]);
         }
 
