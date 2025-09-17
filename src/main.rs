@@ -8,15 +8,12 @@ use tabled::settings::Style;
 
 mod eschaton;
 
-fn to_string(i: usize) -> String {
-    let tens = i / 10;
-    let ones = i - (tens * 10);
-
-    let res = Vec::from([
-        if tens == 0 { b' ' } else { tens as u8 + b'0' },
-        (ones as u8 + b'0'),
-    ]);
-    unsafe { String::from_utf8_unchecked(res) }
+fn to_string(i: usize, count: usize) -> String {
+    if i == 0 {
+        String::from("0")
+    } else {
+        format!("{:.2}", i as f64 / count as f64)
+    }
 }
 
 impl std::fmt::Display for State {
@@ -28,28 +25,28 @@ impl std::fmt::Display for State {
             once(Cow::Borrowed("院内内科")).chain(
                 slots
                     .iter()
-                    .map(|s| to_string(s.inner_medical / self.count).into()),
+                    .map(|s| to_string(s.inner_medical, self.count).into()),
             ),
         );
         builder.push_record(
             once(Cow::Borrowed("院内外科")).chain(
                 slots
                     .iter()
-                    .map(|s| to_string(s.inner_surgical / self.count).into()),
+                    .map(|s| to_string(s.inner_surgical, self.count).into()),
             ),
         );
         builder.push_record(
             once(Cow::Borrowed("院外内科")).chain(
                 slots
                     .iter()
-                    .map(|s| to_string(s.outer_medical / self.count).into()),
+                    .map(|s| to_string(s.outer_medical, self.count).into()),
             ),
         );
         builder.push_record(
             once(Cow::Borrowed("院外外科")).chain(
                 slots
                     .iter()
-                    .map(|s| to_string(s.outer_surgical / self.count).into()),
+                    .map(|s| to_string(s.outer_surgical, self.count).into()),
             ),
         );
         std::fmt::Display::fmt(builder.build().with(Style::modern()), f)?;
