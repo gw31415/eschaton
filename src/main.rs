@@ -20,7 +20,7 @@ impl std::fmt::Display for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = tabled::builder::Builder::new();
         builder.push_record(["平均残席数", "①", "②", "③", "④", "⑤", "⑥"]);
-        let slots = &self.table_vacants;
+        let slots = &self.vacants;
         builder.push_record(
             once(Cow::Borrowed("院内内科")).chain(
                 slots
@@ -83,7 +83,7 @@ struct State {
     pub count: usize,
     pub success: usize,
     pub fails: HashMap<String, usize>,
-    pub table_vacants: eschaton::HospitalTableInner,
+    pub vacants: eschaton::HospitalTableInner,
 }
 
 impl Default for State {
@@ -92,7 +92,7 @@ impl Default for State {
             count: 0,
             success: 0,
             fails: Default::default(),
-            table_vacants: std::array::from_fn(|_| eschaton::TermVacants {
+            vacants: std::array::from_fn(|_| eschaton::TermVacants {
                 inner_medical: 0,
                 inner_surgical: 0,
                 outer_medical: 0,
@@ -103,27 +103,27 @@ impl Default for State {
 }
 
 struct Trial {
-    pub students: Vec<eschaton::Student>,
-    pub table_vacants: eschaton::HospitalTableInner,
+    pub victims: Vec<eschaton::Student>,
+    pub vacants: eschaton::HospitalTableInner,
 }
 
 impl AddAssign<Trial> for State {
     fn add_assign(&mut self, rhs: Trial) {
         let Trial {
-            students,
-            table_vacants,
+            victims,
+            vacants,
         } = rhs;
         self.count += 1;
-        if students.is_empty() {
+        if victims.is_empty() {
             self.success += 1;
         }
-        for student in students {
+        for student in victims {
             self.fails
                 .entry(student.into_name())
                 .and_modify(|c| *c += 1)
                 .or_insert(1);
         }
-        for (a, b) in self.table_vacants.iter_mut().zip(table_vacants.iter()) {
+        for (a, b) in self.vacants.iter_mut().zip(vacants.iter()) {
             *a += b;
         }
     }
@@ -202,31 +202,29 @@ async fn main() {
                 let mut db: eschaton::HospitalTable = db.as_ref().clone();
                 let trial: Trial = {
                     let mut rng = rand::rng();
-                    let mut students: Vec<eschaton::Student> = {
-                        let mut s = students.as_ref().clone();
-                        s.shuffle(&mut rng);
-                        s
-                    }
-                    .clone();
-                    let mut eschatons = Vec::new();
-                    'game: loop {
-                        let mut undone_students = Vec::new();
-                        for mut student in students {
+                    let mut alives: Vec<eschaton::Student> = students.as_ref().clone();
+                    let mut victims = Vec::new();
+                    loop {
+                        alives.shuffle(&mut rng);
+                        let mut alives2 = Vec::new();
+                        for mut student in alives {
                             if student.done() {
                                 continue;
-                            } else if db.random_select(&mut student, &mut rng).is_err() {
-                                eschatons.push(student);
-                            } else {
-                                undone_students.push(student);
                             }
+                            if db.random_select(&mut student, &mut rng).is_ok() {
+                                &mut alives2
+                            } else {
+                                &mut victims
+                            }
+                            .push(student);
                         }
-                        if undone_students.is_empty() {
-                            break 'game Trial {
-                                students: eschatons,
-                                table_vacants: db.into_inner(),
+                        if alives2.is_empty() {
+                            break Trial {
+                                victims,
+                                vacants: db.into_inner(),
                             };
                         }
-                        students = undone_students;
+                        alives = alives2;
                     }
                 };
                 let _ = tx.send(trial).await;
